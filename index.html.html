@@ -1,0 +1,363 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Mapa CR 2021 - Mejorado</title>
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body { font-family: Arial, sans-serif; }
+        header {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white; padding: 20px; text-align: center;
+        }
+        h1 { font-size: 26px; margin: 0; }
+        .version { font-size: 11px; opacity: 0.8; margin-top: 3px; }
+        #map { height: calc(100vh - 80px); width: 100%; }
+        .info-box {
+            position: absolute; top: 10px; right: 10px;
+            background: white; padding: 20px; border-radius: 10px;
+            box-shadow: 0 3px 20px rgba(0,0,0,0.4); z-index: 1000; min-width: 320px;
+        }
+        .info-box h3 {
+            margin: 0 0 15px 0; color: #667eea; font-size: 18px;
+            border-bottom: 2px solid #667eea; padding-bottom: 8px;
+        }
+        .info-row { margin: 10px 0; font-size: 15px; }
+        .info-row strong { color: #555; display: inline-block; width: 100px; }
+        .population {
+            font-size: 32px; font-weight: bold; color: #764ba2;
+            text-align: center; margin: 15px 0;
+        }
+        .nivel-badge {
+            display: inline-block; padding: 3px 10px; border-radius: 12px;
+            font-size: 11px; font-weight: bold; margin-top: 5px;
+        }
+        .nivel-provincia { background: #2196F3; color: white; }
+        .nivel-canton { background: #4CAF50; color: white; }
+        .nivel-distrito { background: #F44336; color: white; }
+        .nivel-escuela { background: #4CAF50; color: white; }
+        .nivel-hospital { background: #C62828; color: white; }
+        .zoom-info {
+            position: absolute; bottom: 50px; left: 10px;
+            background: white; padding: 10px 15px; border-radius: 8px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.3); z-index: 1000;
+            font-size: 12px; font-weight: bold;
+        }
+        .legend {
+            position: absolute; bottom: 30px; right: 10px;
+            background: white; padding: 15px; border-radius: 8px;
+            box-shadow: 0 2px 15px rgba(0,0,0,0.3); z-index: 1000;
+        }
+        .legend h4 { margin: 0 0 10px 0; color: #667eea; font-size: 14px; }
+        .legend-item { margin: 4px 0; font-size: 11px; }
+    </style>
+</head>
+<body>
+    <header>
+        <h1>🗺️ Mapa de Población Costa Rica 2021</h1>
+        <div class="version">V4 - Puntos mejorados + Un solo resaltado</div>
+    </header>
+    <div id="map"></div>
+    
+    <div class="zoom-info" id="zoom-info">Zoom: 8</div>
+    
+    <div class="info-box">
+        <h3>📍 Información</h3>
+        <div id="info"><p style="color: #999; font-style: italic;">Pasa el cursor sobre el mapa</p></div>
+    </div>
+    <div class="legend">
+        <h4>Leyenda</h4>
+        <div class="legend-item">🔵 Provincias (Z7-8)</div>
+        <div class="legend-item">🟢 Cantones (Z9-10)</div>
+        <div class="legend-item">🔴 Distritos (Z11+)</div>
+        <div class="legend-item">🏫 Escuelas (Z12+)</div>
+        <div class="legend-item">🏥 Hospitales (Z10+)</div>
+    </div>
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+    <script>
+        console.log('🚀 V4 - Puntos mejorados + Control de resaltado único');
+        
+        const map = L.map('map').setView([9.7, -84.0], 8);
+        L.tileLayer('tiles/{z}/{x}/{y}.png', { minZoom: 7, maxZoom: 13 }).addTo(map);
+        
+        // CREAR PANES PERSONALIZADOS (z-index)
+        map.createPane('poligonosPane');
+        map.getPane('poligonosPane').style.zIndex = 200;
+        
+        map.createPane('puntosPane');
+        map.getPane('puntosPane').style.zIndex = 650; // Por encima de todo
+        
+        const infoDiv = document.getElementById('info');
+        const zoomInfoDiv = document.getElementById('zoom-info');
+        
+        let capaProvincias, capaCantones, capaDistritos, capaEscuelas, capaHospitales;
+        
+        // ⭐ VARIABLE GLOBAL: Solo un elemento resaltado a la vez
+        let elementoResaltado = null;
+        
+        // Funciones de info
+        function updateInfoProvincia(props) {
+            infoDiv.innerHTML = `
+                <span class="nivel-badge nivel-provincia">PROVINCIA</span>
+                <div class="info-row"><strong>Nombre:</strong> ${props.NOMBRE}</div>
+                <div class="population">${props.POBLACION.toLocaleString()} hab.</div>
+            `;
+        }
+        
+        function updateInfoCanton(props) {
+            infoDiv.innerHTML = `
+                <span class="nivel-badge nivel-canton">CANTÓN</span>
+                <div class="info-row"><strong>Cantón:</strong> ${props.NOMBRE}</div>
+                <div class="info-row"><strong>Provincia:</strong> ${props.PROVINCIA}</div>
+                <div class="population">${props.POBLACION.toLocaleString()} hab.</div>
+            `;
+        }
+        
+        function updateInfoDistrito(props) {
+            infoDiv.innerHTML = `
+                <span class="nivel-badge nivel-distrito">DISTRITO</span>
+                <div class="info-row"><strong>Distrito:</strong> ${props.NDISTRITO}</div>
+                <div class="info-row"><strong>Cantón:</strong> ${props.NCANTON}</div>
+                <div class="info-row"><strong>Provincia:</strong> ${props.PROVINCIA}</div>
+                <div class="population">${Math.round(props.POBLACION_).toLocaleString()} hab.</div>
+            `;
+        }
+        
+        function updateInfoEscuela(props) {
+            infoDiv.innerHTML = `
+                <span class="nivel-badge nivel-escuela">🏫 ESCUELA</span>
+                <div class="info-row"><strong>Nombre:</strong> ${props.NOMBRE}</div>
+                <div class="info-row"><strong>Poblado:</strong> ${props.POBLADO}</div>
+                <div class="info-row"><strong>Población:</strong> ${Math.round(props.POBLACION_).toLocaleString()} hab.</div>
+            `;
+        }
+        
+        function updateInfoHospital(props) {
+            infoDiv.innerHTML = `
+                <span class="nivel-badge nivel-hospital">🏥 HOSPITAL</span>
+                <div class="info-row"><strong>Nombre:</strong> ${props.NOMBRE}</div>
+                <div class="info-row"><strong>Teléfono:</strong> ${props.TELEFONO || 'N/A'}</div>
+                <div class="info-row"><strong>Población:</strong> ${Math.round(props.POBLACION_).toLocaleString()} hab.</div>
+            `;
+        }
+        
+        function resetInfo() {
+            infoDiv.innerHTML = '<p style="color: #999; font-style: italic;">Pasa el cursor sobre el mapa</p>';
+        }
+        
+        // Estilos CORREGIDOS - Ya no son invisibles
+        const estiloPoligonosNormal = { 
+            fillColor: 'transparent', 
+            fillOpacity: 0, 
+            color: '#666666',
+            weight: 1,
+            opacity: 0.5
+        };
+        
+        const estiloPoligonosResaltado = { 
+            weight: 3, 
+            color: '#ffff00', 
+            fillOpacity: 0.3, 
+            fillColor: '#ffff00' 
+        };
+        
+        // ⭐ FUNCIÓN PARA LIMPIAR RESALTADO ANTERIOR
+        function limpiarResaltadoAnterior() {
+            if (elementoResaltado) {
+                if (elementoResaltado.tipo === 'poligono') {
+                    elementoResaltado.layer.setStyle(estiloPoligonosNormal);
+                } else if (elementoResaltado.tipo === 'escuela') {
+                    elementoResaltado.layer.setStyle({ radius: 8, fillOpacity: 0.8 });
+                } else if (elementoResaltado.tipo === 'hospital') {
+                    elementoResaltado.layer.setStyle({ radius: 10, fillOpacity: 0.9 });
+                }
+                elementoResaltado = null;
+            }
+        }
+        
+        // Función para eventos de polígonos CORREGIDA
+        function crearEventosPoligono(feature, layer, updateFunc) {
+            // Aplicar estilo normal inicial
+            layer.setStyle(estiloPoligonosNormal);
+            
+            layer.on('mouseover', function(e) {
+                limpiarResaltadoAnterior();
+                updateFunc(e.target.feature.properties);
+                e.target.setStyle(estiloPoligonosResaltado);
+                e.target.bringToFront();
+                elementoResaltado = { layer: e.target, tipo: 'poligono' };
+            });
+            
+            layer.on('mouseout', function(e) {
+                resetInfo();
+                e.target.setStyle(estiloPoligonosNormal); // ← CORREGIDO: Volver al estilo normal
+                if (elementoResaltado && elementoResaltado.layer === e.target) {
+                    elementoResaltado = null;
+                }
+            });
+            
+            layer.on('click', function(e) {
+                map.fitBounds(e.target.getBounds());
+            });
+        }
+        
+        // Cargar datos
+        Promise.all([
+            fetch('provincias_simple.geojson').then(r => r.json()),
+            fetch('cantones_simple.geojson').then(r => r.json()),
+            fetch('datos_v2.geojson').then(r => r.json()),
+            fetch('escuelas.geojson').then(r => r.json()),
+            fetch('hospitales.geojson').then(r => r.json())
+        ]).then(([provinciasData, cantonesData, distritosData, escuelasData, hospitalesData]) => {
+            
+            console.log('✅ Datos cargados: P=7 C=81 D=376 E=1037 H=25');
+            
+            // Crear capas de polígonos (en pane bajo)
+            capaProvincias = L.geoJSON(provinciasData, {
+                pane: 'poligonosPane',
+                style: estiloPoligonosNormal, // ← CORREGIDO
+                onEachFeature: (f, l) => crearEventosPoligono(f, l, updateInfoProvincia)
+            });
+            
+            capaCantones = L.geoJSON(cantonesData, {
+                pane: 'poligonosPane',
+                style: estiloPoligonosNormal, // ← CORREGIDO
+                onEachFeature: (f, l) => crearEventosPoligono(f, l, updateInfoCanton)
+            });
+            
+            capaDistritos = L.geoJSON(distritosData, {
+                pane: 'poligonosPane',
+                style: estiloPoligonosNormal, // ← CORREGIDO
+                onEachFeature: (f, l) => crearEventosPoligono(f, l, updateInfoDistrito)
+            });
+            
+            // ⭐ ESCUELAS - En pane alto, puntos más grandes
+            capaEscuelas = L.geoJSON(escuelasData, {
+                pane: 'puntosPane', // ⭐ Por encima de polígonos
+                pointToLayer: (f, ll) => L.circleMarker(ll, {
+                    radius: 8, // ⭐ Más grande (era 4)
+                    fillColor: '#4CAF50',
+                    color: '#ffffff',
+                    weight: 2,
+                    opacity: 1,
+                    fillOpacity: 0.8
+                }),
+                interactive: true, // ⭐ Interactivo
+                bubblingMouseEvents: false, // ⭐ No propagar eventos
+                onEachFeature: function(f, l) {
+                    l.on('mouseover', function(e) {
+                        limpiarResaltadoAnterior(); // ⭐ Limpiar cualquier resaltado
+                        updateInfoEscuela(f.properties);
+                        e.target.setStyle({ radius: 12, fillOpacity: 1, weight: 3 }); // ⭐ Más grande en hover
+                        e.target.bringToFront();
+                        elementoResaltado = { layer: e.target, tipo: 'escuela' };
+                        console.log('🏫 Escuela:', f.properties.NOMBRE);
+                    });
+                    
+                    l.on('mouseout', function(e) {
+                        resetInfo();
+                        e.target.setStyle({ radius: 8, fillOpacity: 0.8, weight: 2 });
+                        if (elementoResaltado && elementoResaltado.layer === e.target) {
+                            elementoResaltado = null;
+                        }
+                    });
+                    
+                    l.on('click', function(e) {
+                        map.setView(e.latlng, 13);
+                    });
+                }
+            });
+            
+            // ⭐ HOSPITALES - En pane alto, puntos más grandes
+            capaHospitales = L.geoJSON(hospitalesData, {
+                pane: 'puntosPane', // ⭐ Por encima de polígonos
+                pointToLayer: (f, ll) => L.circleMarker(ll, {
+                    radius: 10, // ⭐ Más grande (era 6)
+                    fillColor: '#C62828',
+                    color: '#ffffff',
+                    weight: 2,
+                    opacity: 1,
+                    fillOpacity: 0.9
+                }),
+                interactive: true, // ⭐ Interactivo
+                bubblingMouseEvents: false, // ⭐ No propagar eventos
+                onEachFeature: function(f, l) {
+                    l.on('mouseover', function(e) {
+                        limpiarResaltadoAnterior(); // ⭐ Limpiar cualquier resaltado
+                        updateInfoHospital(f.properties);
+                        e.target.setStyle({ radius: 14, fillOpacity: 1, weight: 3 }); // ⭐ Más grande en hover
+                        e.target.bringToFront();
+                        elementoResaltado = { layer: e.target, tipo: 'hospital' };
+                        console.log('🏥 Hospital:', f.properties.NOMBRE);
+                    });
+                    
+                    l.on('mouseout', function(e) {
+                        resetInfo();
+                        e.target.setStyle({ radius: 10, fillOpacity: 0.9, weight: 2 });
+                        if (elementoResaltado && elementoResaltado.layer === e.target) {
+                            elementoResaltado = null;
+                        }
+                    });
+                    
+                    l.on('click', function(e) {
+                        map.setView(e.latlng, 12);
+                    });
+                }
+            });
+            
+            // Función para cambiar capas por zoom
+            function actualizarCapasPorZoom() {
+                const zoom = map.getZoom();
+                zoomInfoDiv.textContent = 'Zoom: ' + zoom;
+                
+                // ⭐ Limpiar resaltado al cambiar zoom
+                limpiarResaltadoAnterior();
+                resetInfo();
+                
+                // Remover todas las capas
+                if (map.hasLayer(capaProvincias)) map.removeLayer(capaProvincias);
+                if (map.hasLayer(capaCantones)) map.removeLayer(capaCantones);
+                if (map.hasLayer(capaDistritos)) map.removeLayer(capaDistritos);
+                if (map.hasLayer(capaEscuelas)) map.removeLayer(capaEscuelas);
+                if (map.hasLayer(capaHospitales)) map.removeLayer(capaHospitales);
+                
+                // Agregar según zoom
+                if (zoom >= 7 && zoom <= 8) {
+                    map.addLayer(capaProvincias);
+                    console.log('🔵 PROVINCIAS');
+                }
+                else if (zoom >= 9 && zoom <= 10) {
+                    map.addLayer(capaCantones);
+                    console.log('🟢 CANTONES');
+                }
+                else if (zoom == 11) {
+                    map.addLayer(capaDistritos);
+                    map.addLayer(capaHospitales); // ⭐ Hospitales desde Z11
+                    console.log('🔴 DISTRITOS + 🏥');
+                }
+                else if (zoom >= 12) {
+                    map.addLayer(capaDistritos);
+                    map.addLayer(capaHospitales);
+                    map.addLayer(capaEscuelas); // ⭐ Escuelas desde Z12
+                    console.log('🔴 DISTRITOS + 🏫 + 🏥');
+                }
+            }
+            
+            map.on('zoomend', actualizarCapasPorZoom);
+            actualizarCapasPorZoom();
+            
+            console.log('✅ Mapa listo con puntos mejorados');
+            console.log('💡 Los puntos están ENCIMA de los polígonos');
+            console.log('💡 Solo UN elemento resaltado a la vez');
+            
+        }).catch(e => {
+            console.error('❌ Error:', e);
+            infoDiv.innerHTML = '<p style="color: #d9534f;">⚠️ Error cargando datos</p>';
+        });
+        
+        L.control.scale({ imperial: false, position: 'bottomleft' }).addTo(map);
+    </script>
+</body>
+</html>
